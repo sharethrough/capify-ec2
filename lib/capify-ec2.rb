@@ -7,8 +7,6 @@ require 'colored'
 require 'net/http'
 require 'net/https'
 require 'net/ssh'
-require 'byebug'
-require 'pry-byebug'
 require 'rest-client'
 require File.expand_path(File.dirname(__FILE__) + '/capify-ec2/server')
 require File.expand_path(File.dirname(__FILE__) + '/capify-ec2/cloudwatch')
