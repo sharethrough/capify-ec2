@@ -22,4 +22,5 @@ Gem::Specification.new do |s|
   s.add_dependency('fog', '>= 1.23.0')
   s.add_dependency('colored', '=1.2')
   s.add_dependency('capistrano', '~> 2.14')
+  s.add_dependency("rest-client", '~> 1.8.0')
 end

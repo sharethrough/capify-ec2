@@ -151,6 +151,9 @@ Capistrano::Configuration.instance(:must_exist).load do
               options = {}
               options[:https]   = healthcheck_for_role[:https]   ||= false
               options[:timeout] = healthcheck_for_role[:timeout] ||= 60
+              options[:bastion_host] = healthcheck_for_role[:bastion_host] ||= nil
+              options[:bastion_user] = healthcheck_for_role[:bastion_user] ||= nil
+              options[:bastion_private_key] = healthcheck_for_role[:bastion_private_key] ||= ["~/.ssh/id_rsa"]
 
               healthcheck = capify_ec2.instance_health_by_url( server_dns,
                                                                healthcheck_for_role[:port],
