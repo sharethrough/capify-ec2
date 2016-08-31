@@ -8,6 +8,7 @@ require 'net/http'
 require 'net/https'
 require 'net/ssh'
 require 'rest-client'
+
 require File.expand_path(File.dirname(__FILE__) + '/capify-ec2/server')
 require File.expand_path(File.dirname(__FILE__) + '/capify-ec2/cloudwatch')
 
@@ -364,6 +365,7 @@ class CapifyEc2
     end
 
     protocol = options[:https] ? 'https://' : 'http://'
+
     uri = URI("#{protocol}#{dns}:#{port}#{path}")
 
     puts "[Capify-EC2] Checking '#{uri}' for the content '#{expected_response.inspect}'..."
@@ -385,7 +387,7 @@ class CapifyEc2
             code = body.to_s != "" ? 200 : 503
             net_http_resp = Net::HTTPResponse.new(HTTPV, code, "")
             if body.to_s == ""
-              body = "Connection refused for #{uri.host} port #{uri.port}"
+              body = "Connection refused for #{uri.to_s}"
             end
             result = RestClient::Response.create(body.to_s, net_http_resp, nil, nil)
           elsif(options[:via].to_s.downcase == "post")
@@ -420,7 +422,7 @@ end
 
 def healthcheck_via_bastion(uri, host, user, private_key)
   Net::SSH.start(host, user, :keys => private_key) do |ssh|
-    ssh.exec! "/usr/bin/curl #{uri.host}:#{uri.port}#{uri.path}" do |ch, stream, data|
+    ssh.exec! "/usr/bin/curl #{uri.to_s}" do |ch, stream, data|
       if stream == :stdout
         return data
       end
