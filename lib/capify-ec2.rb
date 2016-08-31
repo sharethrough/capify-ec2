@@ -8,6 +8,8 @@ require 'net/http'
 require 'net/https'
 require 'net/ssh'
 require 'rest-client'
+require 'byebug'
+require 'pry-byebug'
 
 require File.expand_path(File.dirname(__FILE__) + '/capify-ec2/server')
 require File.expand_path(File.dirname(__FILE__) + '/capify-ec2/cloudwatch')
@@ -393,7 +395,7 @@ class CapifyEc2
           elsif(options[:via].to_s.downcase == "post")
             result = http.post(uri.path, options[:data])
           else
-            result = http.get(uri.path)
+            result = http.get(uri.to_s)
           end
           raise "Server responded with '#{result.code}: #{result.body}', expected '#{expected_response}'" unless response_matches_expected?(result.body, expected_response)
         rescue => e
