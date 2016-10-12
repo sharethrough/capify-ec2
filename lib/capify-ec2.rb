@@ -395,7 +395,7 @@ class CapifyEc2
           elsif(options[:via].to_s.downcase == "post")
             result = http.post(uri.path, options[:data])
           else
-            result = http.get(uri.to_s)
+            result = http.get(uri)
           end
           raise "Server responded with '#{result.code}: #{result.body}', expected '#{expected_response}'" unless response_matches_expected?(result.body, expected_response)
         rescue => e
