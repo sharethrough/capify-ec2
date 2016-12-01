@@ -105,7 +105,7 @@ class CapifyEc2
     cw = CapifyCloudwatch.new(aws_access_key_id, aws_secret_access_key) if graph
 
     # Set minimum widths for the variable length instance attributes.
-    column_widths = { :name_min => 4, :type_min => 4, :dns_min => 5, :roles_min => @ec2_config[:aws_roles_tag].length, :stages_min => @ec2_config[:aws_stages_tag].length, :options_min => @ec2_config[:aws_options_tag].length }
+    column_widths = { :name_min => 4, :type_min => 4, :dns_min => 5, :roles_min => @ec2_config[:aws_roles_tag].length, :stages_min => @ec2_config[:aws_stages_tag].length, :options_min => @ec2_config[:aws_options_tag].length, :id_min => 10 }
 
     # Find the longest attribute across all instances, to format the columns properly.
     column_widths[:name]    = desired_instances.map{|i| i.name.to_s.ljust( column_widths[:name_min] )                                   || ' ' * column_widths[:name_min]    }.max_by(&:length).length
@@ -114,6 +114,7 @@ class CapifyEc2
     column_widths[:roles]   = desired_instances.map{|i| i.tags[@ec2_config[:aws_roles_tag]].to_s.ljust( column_widths[:roles_min] )     || ' ' * column_widths[:roles_min]   }.max_by(&:length).length
     column_widths[:stages]  = desired_instances.map{|i| i.tags[@ec2_config[:aws_stages_tag]].to_s.ljust( column_widths[:stages_min] )   || ' ' * column_widths[:stages_min]  }.max_by(&:length).length
     column_widths[:options] = desired_instances.map{|i| i.tags[@ec2_config[:aws_options_tag]].to_s.ljust( column_widths[:options_min] ) || ' ' * column_widths[:options_min] }.max_by(&:length).length
+    column_widths[:id]      = desired_instances.map{|i| i.id.to_s.ljust( column_widths[:id_min] ) || ' ' * column_widths[:id_min] }.max_by(&:length).length
 
     roles_present   = desired_instances.map{|i| i.tags[@ec2_config[:aws_roles_tag]].to_s}.max_by(&:length).length > 0
     options_present = desired_instances.map{|i| i.tags[@ec2_config[:aws_options_tag]].to_s}.max_by(&:length).length > 0
@@ -128,7 +129,7 @@ class CapifyEc2
     status_output = []
     status_output << 'Num'                                                         .bold
     status_output << 'Name'                       .ljust( column_widths[:name]    ).bold
-    status_output << 'ID'                         .ljust( 10                      ).bold
+    status_output << 'ID'                         .ljust( column_widths[:id]      ).bold
     status_output << 'Type'                       .ljust( column_widths[:type]    ).bold
     status_output << 'DNS'                        .ljust( column_widths[:dns]     ).bold
     status_output << 'Zone'                       .ljust( 10                      ).bold
