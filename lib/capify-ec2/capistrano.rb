@@ -86,7 +86,6 @@ Capistrano::Configuration.instance(:must_exist).load do
     after "deploy:rollback", "ec2:register_instance"
   end
 
-
   desc "Deploy to multiple servers at a time"
   task :parallel_deploy do
     puts "[Capify-EC2] Performing parallel deployment..."
@@ -100,64 +99,83 @@ Capistrano::Configuration.instance(:must_exist).load do
     failed_deploys = []
     server_dns = server_roles = nil
     work_q = Queue.new
-    semaphore = Mutex.new
-    elb = nil
+    load_balancer_to_reregister = nil
+    number_of_instances_behind_elb = 0
+
     all_servers.keys.each do |server_dns|
       work_q.push server_dns
-      unless elb
-        elb = capify_ec2.get_elb_by_dns(server_dns)
+      if load_balancer_to_reregister.nil?
+        load_balancer_to_reregister = capify_ec2.get_elb_by_dns(server_dns)
+      else
+        number_of_instances_behind_elb = load_balancer_to_reregister.instances.length
       end
     end
-
     # set worker to be at most 1/3 of the number of instances behind elb, prevent deploy to all instances
     # if the pass in worker_size is too big
-    worker_size = [fetch(:worker_size) ,[1, elb.instances.length / 3 ].max].min
+    worker_size = [fetch(:worker_size) ,[1, number_of_instances_behind_elb / 3 ].max].min
     puts "[Capify-EC2] Number of workers = #{worker_size}".green
+    successful_deploys_pipe_read, successful_deploys_pipe_write = IO.pipe
+    failed_deploys_pipe_read, failed_deploys_pipe_write = IO.pipe
 
-    workers = (0...worker_size).map do
-      sleep(rand(100) * 0.002)
-      Thread.new do
-        worker_id = Thread.current.object_id.to_s.split(//).last(8).join.to_s
+    workers = []
+    server_dns
+    while work_q.length
+      begin
+        server_dns = work_q.pop(true)
+      rescue Exception => e
+        Process.waitall
+        successful_deploys_pipe_write.puts "completed"
+        failed_deploys_pipe_write.puts "completed"
+
+        while message = successful_deploys_pipe_read.gets
+          message.gsub!(/\s+/, '')
+          message == "completed" ? break : successful_deploys << message
+        end
+
+        while message = failed_deploys_pipe_read.gets
+          message.gsub!(/\s+/, '')
+          message == "completed" ? break : failed_deploys << message
+        end
+        rolling_deploy_status(all_servers, successful_deploys, failed_deploys)
+
+        if failed_deploys.length
+          exit 1
+        end
+        exit
+      end
+
+      workers << Process.fork do
         begin
-          while work_q.length
-            load_balancer_to_reregister = nil
-            semaphore.synchronize {
-              server_dns = work_q.pop(true)
-              server_roles = all_servers[server_dns]
-              # instance to deploy depends on the "role" set, need to protect it with mutext
-              puts "[Capify-EC2] Worker #{worker_id}: Waiting to deploy #{server_dns}".yellow
-              index = all_servers.length - work_q.length - 1
-              puts "[Capify-EC2] Worker #{worker_id}: Starting deploy #{server_dns}".yellow
-              roles.clear
-              load_balancer_to_reregister = _deploy_one_instance(server_dns, server_roles, index, all_options, all_servers, worker_id)
-            }
+          worker_id = $$
+          server_roles = all_servers[server_dns]
+          # instance to deploy depends on the "role" set, need to protect it with mutext
+          puts "[Capify-EC2] Worker #{worker_id}: Waiting to deploy #{server_dns}".yellow
+          index = all_servers.length - work_q.length - 1
+          puts "[Capify-EC2] Worker #{worker_id}: Starting deploy #{server_dns}".yellow
+          roles.clear
+           _deploy_one_instance(server_dns, server_roles, index, all_options, all_servers, worker_id)
+           server_roles.each do |a_role|
+             _perform_health_check(all_options, a_role, server_dns, worker_id)
+           end
+           _reregister_instance(server_dns, load_balancer_to_reregister, worker_id)
 
-            server_roles.each do |a_role|
-              _perform_health_check(all_options, a_role, server_dns, worker_id)
-            end
-            _reregister_instance(server_dns, load_balancer_to_reregister, worker_id)
-
-            puts "[Capify-EC2] Worker #{worker_id}: Deployment successful to #{instance_dns_with_name_tag(server_dns)}.".green.bold
-            successful_deploys << server_dns
-          end
-        rescue ThreadError => e
-          if work_q.length > 0
-            puts "[Capify-EC2]"
-            puts "[Capify-EC2] Worker #{worker_id} Parallel deploy failed #{server_dns} due to worker error: #{e}!".red.bold
-            failed_deploys << server_dns
-          else
-            puts "[Capify-EC2] Worker #{worker_id} done, no more deploy".green.bold
-          end
+           puts "[Capify-EC2] Worker #{worker_id}: Deployment successful to #{instance_dns_with_name_tag(server_dns)}.".green.bold
+           successful_deploys_pipe_write.puts server_dns
+           successful_deploys_pipe_write.close
         rescue Exception => e
           puts "[Capify-EC2]"
           puts "[Capify-EC2] Worker #{worker_id} Parallel deploy failed #{server_dns} due to unknown error: #{e}!".red.bold
           # puts e.backtrace
-          failed_deploys << server_dns
+          failed_deploys_pipe_write.puts server_dns
+          failed_deploys_pipe_write.close
         end
+        exit
       end
-    end; "ok"
-    workers.map(&:join)
-    rolling_deploy_status(all_servers, successful_deploys, failed_deploys)
+
+      if workers.size >= worker_size
+        workers.delete Process.wait
+      end
+    end
   end
 
   desc "Deploy to servers one at a time."

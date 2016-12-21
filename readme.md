@@ -551,10 +551,7 @@ If an instance has been tagged with multiple roles, this behaviour will apply if
 If an instance is not associated with any ELBs, then the behaviour will be skipped silently, even if `:load_balanced` is set to 'true'.
 
 #### Parallel Deployments
-This features allows you to deploy in parallel.  
-
-##### Implementation
-It creates a set of workers and put the instances IPs in a queue.  The workers pick up instance IP from the queue and start the deploy.  At any given time, there should only one worker copying code onto the instance.  However, the health check, register instance to ELB etc are done in parallel.  The reason for not copying code in parallel is simplicity and reduce the communication between workers during health check.   Health check takes up the longest time in the deploy, so parallelize that should reduce the deploy time significantly
+This features allows you to deploy in parallel.  The parent creates workers (via process) and put the instances IPs in a queue.  The workers pick up instance IP from the queue and start the deploy.  Once a worker finishes a deploy, it sends the instance IP back to the parent through pipe.  This is the only way to keep track of successful and failed deploys between parent and workers.  Instances that are not originally behind ELB will be placed behind ELB once the deploy is successful
 
 ##### The WORKERS environment variable
 User can pass in a **WORKERS** environment variable in the command line to set the level of parallelism.  However, there is a check to ensure the number of workers is less than **1/3** of total active instances behind the ELB.  This is to prevent taking all instances out of ELB simultaneously by accident.  For example
