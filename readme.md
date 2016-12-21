@@ -550,7 +550,26 @@ If an instance has been tagged with multiple roles, this behaviour will apply if
 
 If an instance is not associated with any ELBs, then the behaviour will be skipped silently, even if `:load_balanced` is set to 'true'.
 
+#### Parallel Deployments
+This features allows you to deploy in parallel.  
 
+##### Implementation
+It creates a set of workers and put the instances IPs in a queue.  The workers pick up instance IP from the queue and start the deploy.  At any given time, there should only one worker copying code onto the instance.  However, the health check, register instance to ELB etc are done in parallel.  The reason for not copying code in parallel is simplicity and reduce the communication between workers during health check.   Health check takes up the longest time in the deploy, so parallelize that should reduce the deploy time significantly
+
+##### The WORKERS environment variable
+User can pass in a **WORKERS** environment variable in the command line to set the level of parallelism.  However, there is a check to ensure the number of workers is less than **1/3** of total active instances behind the ELB.  This is to prevent taking all instances out of ELB simultaneously by accident.  For example
+
+* User pass in **WORKERS=10** from command line
+* There are only **4** instances behind ELB
+
+Only **1** worker will be created for deploy
+
+##### Usage
+To use parallel deployment
+
+```ruby
+WORKERS=5 cap parallel_deploy
+```
 
 #### Viewing All Instances
 
