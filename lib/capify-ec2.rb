@@ -181,7 +181,6 @@ class CapifyEc2
     elbs_found_for_project = false
 
     @elbs.each_with_index do |lb, i|
-
       status_output = []
       sub_output    = []
       lb.instances.each do |instance|
@@ -328,12 +327,12 @@ class CapifyEc2
     false
   end
 
-  def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout)
+  def reregister_instance_with_elb_by_dns(server_dns, load_balancer, timeout, worker_id)
     instance = get_instance_by_dns(server_dns)
 
     sleep 10
 
-    puts "[Capify-EC2] Re-registering instance with ELB '#{load_balancer.id}'..."
+    puts "[Capify-EC2] Worker #{worker_id}: Re-registering instance with ELB '#{load_balancer.id}'..."
     result = elb.register_instances_with_load_balancer(instance.id, load_balancer.id)
 
     raise "Unable to re-register instance with ELB '#{load_balancer.id}'..." unless result.status == 200
@@ -346,7 +345,7 @@ class CapifyEc2
           state = instance_health(load_balancer, instance)
           raise "Instance not ready" unless state == 'InService'
         rescue => e
-          puts "[Capify-EC2] Unexpected response: #{e}..."
+          puts "[Capify-EC2] Worker #{worker_id}: Unexpected response: #{e}..."
           sleep 1
           retry
         end
@@ -368,10 +367,11 @@ class CapifyEc2
     end
 
     protocol = options[:https] ? 'https://' : 'http://'
+    worker_id = options[:worker_id] ? options[:worker_id] : 1
 
     uri = URI("#{protocol}#{dns}:#{port}#{path}")
 
-    puts "[Capify-EC2] Checking '#{uri}' for the content '#{expected_response.inspect}'..."
+    puts "[Capify-EC2] Worker #{worker_id}: Checking '#{uri}' for the content '#{expected_response.inspect}'..."
 
     http = Net::HTTP.new(uri.host, uri.port)
 
@@ -400,7 +400,7 @@ class CapifyEc2
           end
           raise "Server responded with '#{result.code}: #{result.body}', expected '#{expected_response}'" unless response_matches_expected?(result.body, expected_response)
         rescue => e
-          puts "[Capify-EC2] Unexpected response: #{e}..."
+          puts "[Capify-EC2] Worker #{worker_id}: Unexpected response: #{e}..."
           sleep 1
           retry
         end
@@ -409,6 +409,12 @@ class CapifyEc2
     end
     result ? response_matches_expected?(result.body, expected_response) : false
   end
+
+  def get_elb_by_dns(server_dns)
+    instance = get_instance_by_dns(server_dns)
+    load_balancer = get_load_balancer_by_instance(instance.id)
+  end
+
 end
 
 def instance_dns_with_name_tag(dns)

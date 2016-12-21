@@ -1,6 +1,7 @@
 require File.join(File.dirname(__FILE__), '../capify-ec2')
 require 'colored'
 require 'pp'
+require 'thread'
 
 Capistrano::Configuration.instance(:must_exist).load do
   def capify_ec2
@@ -85,34 +86,93 @@ Capistrano::Configuration.instance(:must_exist).load do
     after "deploy:rollback", "ec2:register_instance"
   end
 
+
+  desc "Deploy to multiple servers at a time"
+  task :parallel_deploy do
+    puts "[Capify-EC2] Performing parallel deployment..."
+    set :worker_size, ENV['WORKERS'].to_i < 1 ? 5 : ENV['WORKERS'].to_i
+
+    all_servers, all_options = _find_instances_to_deploy
+    _set_release_version
+
+    index = 0
+    successful_deploys = []
+    failed_deploys = []
+    server_dns = server_roles = nil
+    work_q = Queue.new
+    semaphore = Mutex.new
+    elb = nil
+    all_servers.keys.each do |server_dns|
+      work_q.push server_dns
+      unless elb
+        elb = capify_ec2.get_elb_by_dns(server_dns)
+      end
+    end
+
+    # set worker to be at most 1/3 of the number of instances behind elb, prevent deploy to all instances
+    # if the pass in worker_size is too big
+    worker_size = [fetch(:worker_size) ,[1, elb.instances.length / 3 ].max].min
+    puts "[Capify-EC2] Number of workers = #{worker_size}".green
+
+    workers = (0...worker_size).map do
+      sleep(rand(100) * 0.002)
+      Thread.new do
+        worker_id = Thread.current.object_id.to_s.split(//).last(8).join.to_s
+        begin
+          while work_q.length
+            load_balancer_to_reregister = nil
+            semaphore.synchronize {
+              server_dns = work_q.pop(true)
+              server_roles = all_servers[server_dns]
+              # instance to deploy depends on the "role" set, need to protect it with mutext
+              puts "[Capify-EC2] Worker #{worker_id}: Waiting to deploy #{server_dns}".yellow
+              index = all_servers.length - work_q.length - 1
+              puts "[Capify-EC2] Worker #{worker_id}: Starting deploy #{server_dns}".yellow
+              roles.clear
+              load_balancer_to_reregister = _deploy_one_instance(server_dns, server_roles, index, all_options, all_servers, worker_id)
+            }
+
+            server_roles.each do |a_role|
+              _perform_health_check(all_options, a_role, server_dns, worker_id)
+            end
+            _reregister_instance(server_dns, load_balancer_to_reregister, worker_id)
+
+            puts "[Capify-EC2] Worker #{worker_id}: Deployment successful to #{instance_dns_with_name_tag(server_dns)}.".green.bold
+            successful_deploys << server_dns
+          end
+        rescue ThreadError => e
+          if work_q.length > 0
+            puts "[Capify-EC2]"
+            puts "[Capify-EC2] Worker #{worker_id} Parallel deploy failed #{server_dns} due to worker error: #{e}!".red.bold
+            failed_deploys << server_dns
+          else
+            puts "[Capify-EC2] Worker #{worker_id} done, no more deploy".green.bold
+          end
+        rescue Exception => e
+          puts "[Capify-EC2]"
+          puts "[Capify-EC2] Worker #{worker_id} Parallel deploy failed #{server_dns} due to unknown error: #{e}!".red.bold
+          # puts e.backtrace
+          failed_deploys << server_dns
+        end
+      end
+    end; "ok"
+    workers.map(&:join)
+    rolling_deploy_status(all_servers, successful_deploys, failed_deploys)
+  end
+
   desc "Deploy to servers one at a time."
   task :rolling_deploy do
     puts "[Capify-EC2] Performing rolling deployment..."
 
-    all_servers       = {}
-    all_options       = {}
-
-    roles.each do |role|
-      role[1].servers.each do |s|
-        server_dns = s.host.to_s
-        all_servers[ server_dns ] ||= []
-        all_servers[ server_dns ] << role[0]
-        all_options[ role[0] ] ||= {}
-        all_options[ role[0] ][ server_dns ] = (s.options || {})
-      end
-    end
-
-    successful_deploys = []
-    failed_deploys     = []
-
+    all_servers, all_options = _find_instances_to_deploy
+    worker_id = 1
     # Here outside of the scope of the rescue so we can refer to it if a general exception is raised.
-    load_balancer_to_reregister = nil
-
     begin
+      _set_release_version
 
-      # Fetch and set the real revision (eg/ Git ref) now, so any changes made to SCM during deployment will not be inadvertently included.
-      puts "[Capify-EC2] Determining release revision..."
-      set :revision, (fetch :real_revision)
+      failed_deploys = []
+      successful_deploys = []
+      load_balancer_to_reregister = nil
 
       all_servers.each_with_index do |server,index|
 
@@ -120,68 +180,14 @@ Capistrano::Configuration.instance(:must_exist).load do
         server_roles = server[1]
 
         roles.clear
-
-        load_balancer_to_reregister = nil # Set to nil again here, to ensure it always starts off nil for every iteration.
-        is_load_balanced = false
+        load_balancer_to_reregister = _deploy_one_instance(server_dns, server_roles, index, all_options, all_servers)
 
         server_roles.each do |a_role|
-          role a_role, server_dns, all_options[a_role][server_dns]
-          is_load_balanced = true if all_options[a_role][server_dns][:load_balanced]
+          _perform_health_check(all_options, a_role, server_dns, worker_id)
         end
+        _reregister_instance(server_dns, load_balancer_to_reregister)
 
-        puts "[Capify-EC2]"
-        puts "[Capify-EC2] (#{index+1} of #{all_servers.length}) Beginning deployment to #{instance_dns_with_name_tag(server_dns)} with #{server_roles.count > 1 ? 'roles' : 'role'} '#{server_roles.join(', ')}'...".bold
-
-        unless dry_run
-          load_balancer_to_reregister = capify_ec2.deregister_instance_from_elb_by_dns(server_dns) if is_load_balanced
-        end
-
-        # Call the standard 'cap deploy' task with our redefined role containing a single server.
-        top.deploy.default
-
-        server_roles.each do |a_role|
-
-          # If healthcheck(s) are defined for this role, run them.
-          if all_options[a_role][server_dns][:healthcheck]
-            healthchecks_for_role = [ all_options[a_role][server_dns][:healthcheck] ].flatten
-
-            puts "[Capify-EC2] Starting #{pluralise(healthchecks_for_role.size, 'healthcheck')} for role '#{a_role}'..."
-
-            healthchecks_for_role.each_with_index do |healthcheck_for_role, i|
-              options = {}
-              options[:https]   = healthcheck_for_role[:https]   ||= false
-              options[:timeout] = healthcheck_for_role[:timeout] ||= 60
-              options[:bastion_host] = healthcheck_for_role[:bastion_host] ||= nil
-              options[:bastion_user] = healthcheck_for_role[:bastion_user] ||= nil
-              options[:bastion_private_key] = healthcheck_for_role[:bastion_private_key] ||= ["~/.ssh/id_rsa"]
-
-              healthcheck = capify_ec2.instance_health_by_url( server_dns,
-                                                               healthcheck_for_role[:port],
-                                                               healthcheck_for_role[:path],
-                                                               healthcheck_for_role[:result],
-                                                               options )
-              if healthcheck
-                puts "[Capify-EC2] Healthcheck #{i+1} of #{healthchecks_for_role.size} for role '#{a_role}' successful.".green.bold
-              else
-                puts "[Capify-EC2] Healthcheck #{i+1} of #{healthchecks_for_role.size} for role '#{a_role}' failed!".red.bold
-                raise CapifyEC2RollingDeployError.new("Healthcheck timeout exceeded", server_dns)
-              end
-            end
-          end
-
-        end
-
-        if load_balancer_to_reregister
-          reregistered = capify_ec2.reregister_instance_with_elb_by_dns(server_dns, load_balancer_to_reregister, 60)
-          if reregistered
-            puts "[Capify-EC2] Instance registration with ELB '#{load_balancer_to_reregister.id}' successful.".green.bold
-          else
-            puts "[Capify-EC2] Instance registration with ELB '#{load_balancer_to_reregister.id}' failed!".red.bold
-            raise CapifyEC2RollingDeployError.new("ELB registration timeout exceeded", server_dns)
-          end
-        end
-
-        puts "[Capify-EC2] Deployment successful to #{instance_dns_with_name_tag(server_dns)}.".green.bold
+        puts "[Capify-EC2] Worker #{worker_id}: Deployment successful to #{instance_dns_with_name_tag(server_dns)}.".green.bold
         successful_deploys << server_dns
 
       end
@@ -328,6 +334,92 @@ Capistrano::Configuration.instance(:must_exist).load do
         "#{plural}"
     else
         "#{singular}s"
+    end
+  end
+
+  def _find_instances_to_deploy
+    all_servers = {}
+    all_options = {}
+    roles.each do |role|
+      role[1].servers.each do |s|
+        server_dns = s.host.to_s
+        all_servers[ server_dns ] ||= []
+        all_servers[ server_dns ] << role[0]
+        all_options[ role[0] ] ||= {}
+        all_options[ role[0] ][ server_dns ] = (s.options || {})
+      end
+    end
+    return all_servers, all_options
+  end
+
+  def _deploy_one_instance(server_dns, server_roles, index, all_options, all_servers, worker_id=1)
+    is_load_balanced = false
+    load_balancer_to_reregister = nil
+    server_roles.each do |a_role|
+      ## sets the instance to deploy
+      role a_role, server_dns, all_options[a_role][server_dns]
+      is_load_balanced = true if all_options[a_role][server_dns][:load_balanced]
+    end
+
+    puts "[Capify-EC2]"
+    puts "[Capify-EC2] Worker #{worker_id}: (#{index+1} of #{all_servers.length}) Beginning deployment to #{instance_dns_with_name_tag(server_dns)} with #{server_roles.count > 1 ? 'roles' : 'role'} '#{server_roles.join(', ')}'...".bold
+
+    unless dry_run
+      load_balancer_to_reregister = capify_ec2.deregister_instance_from_elb_by_dns(server_dns) if is_load_balanced
+    end
+
+    # Call the standard 'cap deploy' task with our redefined role containing a single server.
+    top.deploy.default
+    load_balancer_to_reregister
+  end
+
+  def _set_release_version
+    # Fetch and set the real revision (eg/ Git ref) now, so any changes made to SCM during deployment will not be inadvertently included.
+    puts "[Capify-EC2] Determining release revision..."
+    set :revision, (fetch :real_revision)
+  end
+
+  def _reregister_instance(server_dns, load_balancer_to_reregister, worker_id=1)
+    if load_balancer_to_reregister
+      reregistered = capify_ec2.reregister_instance_with_elb_by_dns(server_dns, load_balancer_to_reregister, 60, worker_id)
+      if reregistered
+        puts "[Capify-EC2] Worker #{worker_id}: Instance #{server_dns} registration with ELB '#{load_balancer_to_reregister.id}' successful.".green.bold
+      else
+        puts "[Capify-EC2] Worker #{worker_id}: Instance #{server_dns} registration with ELB '#{load_balancer_to_reregister.id}' failed!".red.bold
+        raise CapifyEC2RollingDeployError.new("ELB registration timeout exceeded", server_dns)
+      end
+    end
+  end
+
+  def _perform_health_check(all_options, a_role, server_dns, worker_id=1)
+
+    # If healthcheck(s) are defined for this role, run them.
+    if all_options[a_role][server_dns][:healthcheck]
+      healthchecks_for_role = [ all_options[a_role][server_dns][:healthcheck] ].flatten
+
+      puts "[Capify-EC2] Worker #{worker_id}: Starting #{pluralise(healthchecks_for_role.size, 'healthcheck')} for role '#{a_role}'..."
+
+      healthchecks_for_role.each_with_index do |healthcheck_for_role, i|
+        options = {}
+        options[:https]   = healthcheck_for_role[:https]   ||= false
+        options[:timeout] = healthcheck_for_role[:timeout] ||= 60
+        options[:bastion_host] = healthcheck_for_role[:bastion_host] ||= nil
+        options[:bastion_user] = healthcheck_for_role[:bastion_user] ||= nil
+        options[:bastion_private_key] = healthcheck_for_role[:bastion_private_key] ||= ["~/.ssh/id_rsa"]
+        options[:worker_id] = worker_id
+
+        healthcheck = capify_ec2.instance_health_by_url( server_dns,
+                                                         healthcheck_for_role[:port],
+                                                         healthcheck_for_role[:path],
+                                                         healthcheck_for_role[:result],
+                                                         options )
+        if healthcheck
+          puts "[Capify-EC2] Worker #{worker_id}: Healthcheck #{i+1} of #{healthchecks_for_role.size} for role '#{a_role}' successful.".green.bold
+        else
+          puts "[Capify-EC2] Worker #{worker_id}: Healthcheck #{i+1} of #{healthchecks_for_role.size} for role '#{a_role}' failed!".red.bold
+          raise CapifyEC2RollingDeployError.new("Worker #{worker_id}: Healthcheck timeout exceeded", server_dns)
+        end
+      end
     end
   end
 end
