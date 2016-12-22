@@ -138,9 +138,11 @@ Capistrano::Configuration.instance(:must_exist).load do
         end
         rolling_deploy_status(all_servers, successful_deploys, failed_deploys)
 
-        if failed_deploys.length
+        if failed_deploys.length > 0
+          puts "exit with 1"
           exit 1
         end
+        puts "exit with 0"
         exit 0
       end
 
