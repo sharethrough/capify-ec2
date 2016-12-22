@@ -141,7 +141,7 @@ Capistrano::Configuration.instance(:must_exist).load do
         if failed_deploys.length
           exit 1
         end
-        exit
+        exit 0
       end
 
       workers << Process.fork do
