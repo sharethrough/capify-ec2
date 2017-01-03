@@ -116,11 +116,16 @@ Capistrano::Configuration.instance(:must_exist).load do
     puts "[Capify-EC2] Number of workers = #{worker_size}".green
     successful_deploys_pipe_read, successful_deploys_pipe_write = IO.pipe
     failed_deploys_pipe_read, failed_deploys_pipe_write = IO.pipe
+    worker_has_problem = false
 
     workers = []
     server_dns
     while work_q.length
       begin
+        if worker_has_problem
+            raise
+        end
+
         server_dns = work_q.pop(true)
       rescue Exception => e
         Process.waitall
@@ -170,12 +175,17 @@ Capistrano::Configuration.instance(:must_exist).load do
           # puts e.backtrace
           failed_deploys_pipe_write.puts server_dns
           failed_deploys_pipe_write.close
+          exit 99
         end
         exit
       end
 
       if workers.size >= worker_size
-        workers.delete Process.wait
+        pid, status = Process.wait2
+        if status.exitstatus == 99
+            worker_has_problem = true
+        end
+        workers.delete pid
       end
     end
   end
