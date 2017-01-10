@@ -147,8 +147,6 @@ Capistrano::Configuration.instance(:must_exist).load do
           puts "exit with 1"
           exit 1
         end
-        puts "exit with 0"
-        exit 0
       end
 
       workers << Process.fork do
