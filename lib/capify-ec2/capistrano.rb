@@ -56,8 +56,9 @@ Capistrano::Configuration.instance(:must_exist).load do
 
       if server
         instance = numeric?(server) ? capify_ec2.desired_instances[server.to_i] : capify_ec2.get_instance_by_name(server)
+        use_private_ip = capify_ec2.use_private_ip
 
-        if instance and instance.contact_point then
+        if instance and instance.contact_point(use_private_ip) then
           port = ssh_options.fetch(:port, 22)
           key = ""
           if ssh_options[:keys].is_a?(String) && !ssh_options[:keys].to_s.empty?
@@ -66,7 +67,7 @@ Capistrano::Configuration.instance(:must_exist).load do
           if ssh_options[:keys].is_a?(Array) && ssh_options[:keys].length > 0
             key = "-i #{ssh_options[:keys].first}"
           end
-          command = "ssh -p #{port} #{key} #{user}@#{instance.contact_point}"
+          command = "ssh -p #{port} #{key} #{user}@#{instance.contact_point(use_private_ip)}"
           puts "Running `#{command}`"
           exec(command)
         else
@@ -268,7 +269,7 @@ Capistrano::Configuration.instance(:must_exist).load do
       named_instance = capify_ec2.get_instance_by_name(server_name)
 
       task named_instance.name.to_sym do
-        server_address = named_instance.contact_point
+        server_address = named_instance.contact_point(capify_ec2.use_private_ip)
 
         if named_instance.respond_to?(:roles)
           roles = named_instance.roles
@@ -349,7 +350,7 @@ Capistrano::Configuration.instance(:must_exist).load do
       cap_options[key] = value unless cap_options.has_key? key
     end
 
-    role role[:name].to_sym, instance.contact_point, cap_options
+    role role[:name].to_sym, instance.contact_point(capify_ec2.use_private_ip), cap_options
   end
 
   def numeric?(object)

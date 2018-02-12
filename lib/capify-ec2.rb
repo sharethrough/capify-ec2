@@ -46,6 +46,9 @@ class CapifyEc2
     # User can change the Stages tag string
     @ec2_config[:aws_stages_tag] ||= "Stages"
 
+    # User can force use private ip to connect to target
+    @ec2_config[:use_private_ip] ||= false
+
     @ec2_config[:project_tags] << @ec2_config[:project_tag] if @ec2_config[:project_tag]
 
     regions = determine_regions()
@@ -96,6 +99,10 @@ class CapifyEc2
     @ec2_config[:aws_session_token] || Fog.credentials[:aws_session_token] || ENV['AWS_SESSION_TOKEN'] || nil
   end
 
+  def use_private_ip
+    @ec2_config[:use_private_ip] || false
+  end
+
   def display_instances(graph: false)
     unless desired_instances and desired_instances.any?
       puts "[Capify-EC2] No instances were found using your 'ec2.yml' configuration.".red.bold
@@ -110,7 +117,7 @@ class CapifyEc2
     # Find the longest attribute across all instances, to format the columns properly.
     column_widths[:name]    = desired_instances.map{|i| i.name.to_s.ljust( column_widths[:name_min] )                                   || ' ' * column_widths[:name_min]    }.max_by(&:length).length
     column_widths[:type]    = desired_instances.map{|i| i.flavor_id                                                                     || ' ' * column_widths[:type_min]    }.max_by(&:length).length
-    column_widths[:dns]     = desired_instances.map{|i| i.contact_point.to_s.ljust( column_widths[:dns_min] )                           || ' ' * column_widths[:dns_min]     }.max_by(&:length).length
+    column_widths[:dns]     = desired_instances.map{|i| i.contact_point(@ec2_config[:use_private_ip]).to_s.ljust( column_widths[:dns_min] )                           || ' ' * column_widths[:dns_min]     }.max_by(&:length).length
     column_widths[:roles]   = desired_instances.map{|i| i.tags[@ec2_config[:aws_roles_tag]].to_s.ljust( column_widths[:roles_min] )     || ' ' * column_widths[:roles_min]   }.max_by(&:length).length
     column_widths[:stages]  = desired_instances.map{|i| i.tags[@ec2_config[:aws_stages_tag]].to_s.ljust( column_widths[:stages_min] )   || ' ' * column_widths[:stages_min]  }.max_by(&:length).length
     column_widths[:options] = desired_instances.map{|i| i.tags[@ec2_config[:aws_options_tag]].to_s.ljust( column_widths[:options_min] ) || ' ' * column_widths[:options_min] }.max_by(&:length).length
@@ -145,7 +152,7 @@ class CapifyEc2
       status_output << (instance.name || '')                               .ljust( column_widths[:name]    ).green
       status_output << instance.id                                         .ljust( 2                       ).red
       status_output << instance.flavor_id                                  .ljust( column_widths[:type]    ).cyan
-      status_output << instance.contact_point                              .ljust( column_widths[:dns]     ).blue.bold
+      status_output << instance.contact_point(@ec2_config[:use_private_ip])                              .ljust( column_widths[:dns]     ).blue.bold
       status_output << instance.availability_zone                          .ljust( 10                      ).magenta
       status_output << (instance.tags[@ec2_config[:aws_stages_tag]]  || '').ljust( column_widths[:stages]  ).yellow if stages_present
       status_output << (instance.tags[@ec2_config[:aws_roles_tag]]   || '').ljust( column_widths[:roles]   ).yellow if roles_present
@@ -247,7 +254,7 @@ class CapifyEc2
   end
 
   def get_instance_by_dns(dns)
-    desired_instances.select {|instance| instance.contact_point == dns}.first
+    desired_instances.select {|instance| instance.contact_point(@ec2_config[:use_private_ip]) == dns}.first
   end
 
   def instance_health(load_balancer, instance)

@@ -5,8 +5,12 @@ module Fog
   module Compute
     class AWS
       class Server
-        def contact_point
-          dns_name || public_ip_address || private_ip_address
+        def contact_point(use_private_ip = false)
+          if use_private_ip
+            private_ip_address
+          else
+            dns_name || public_ip_address || private_ip_address
+          end
         end
         
         def name
