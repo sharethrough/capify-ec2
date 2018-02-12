@@ -111,13 +111,15 @@ class CapifyEc2
 
     cw = CapifyCloudwatch.new(aws_access_key_id, aws_secret_access_key) if graph
 
+    use_private_ip = @ec2_config[:use_private_ip]
+
     # Set minimum widths for the variable length instance attributes.
     column_widths = { :name_min => 4, :type_min => 4, :dns_min => 5, :roles_min => @ec2_config[:aws_roles_tag].length, :stages_min => @ec2_config[:aws_stages_tag].length, :options_min => @ec2_config[:aws_options_tag].length, :id_min => 10 }
 
     # Find the longest attribute across all instances, to format the columns properly.
     column_widths[:name]    = desired_instances.map{|i| i.name.to_s.ljust( column_widths[:name_min] )                                   || ' ' * column_widths[:name_min]    }.max_by(&:length).length
     column_widths[:type]    = desired_instances.map{|i| i.flavor_id                                                                     || ' ' * column_widths[:type_min]    }.max_by(&:length).length
-    column_widths[:dns]     = desired_instances.map{|i| i.contact_point(@ec2_config[:use_private_ip]).to_s.ljust( column_widths[:dns_min] )                           || ' ' * column_widths[:dns_min]     }.max_by(&:length).length
+    column_widths[:dns]     = desired_instances.map{|i| i.contact_point(use_private_ip).to_s.ljust( column_widths[:dns_min] )           || ' ' * column_widths[:dns_min]     }.max_by(&:length).length
     column_widths[:roles]   = desired_instances.map{|i| i.tags[@ec2_config[:aws_roles_tag]].to_s.ljust( column_widths[:roles_min] )     || ' ' * column_widths[:roles_min]   }.max_by(&:length).length
     column_widths[:stages]  = desired_instances.map{|i| i.tags[@ec2_config[:aws_stages_tag]].to_s.ljust( column_widths[:stages_min] )   || ' ' * column_widths[:stages_min]  }.max_by(&:length).length
     column_widths[:options] = desired_instances.map{|i| i.tags[@ec2_config[:aws_options_tag]].to_s.ljust( column_widths[:options_min] ) || ' ' * column_widths[:options_min] }.max_by(&:length).length
@@ -143,7 +145,7 @@ class CapifyEc2
     status_output << @ec2_config[:aws_stages_tag] .ljust( column_widths[:stages]  ).bold if stages_present
     status_output << @ec2_config[:aws_roles_tag]  .ljust( column_widths[:roles]   ).bold if roles_present
     status_output << @ec2_config[:aws_options_tag].ljust( column_widths[:options] ).bold if options_present
-    status_output << 'CPU'                       .ljust( 16                      ).bold if graph
+    status_output << 'CPU'                        .ljust( 16                      ).bold if graph
     puts status_output.join("   ")
 
     desired_instances.each_with_index do |instance, i|
@@ -152,7 +154,7 @@ class CapifyEc2
       status_output << (instance.name || '')                               .ljust( column_widths[:name]    ).green
       status_output << instance.id                                         .ljust( 2                       ).red
       status_output << instance.flavor_id                                  .ljust( column_widths[:type]    ).cyan
-      status_output << instance.contact_point(@ec2_config[:use_private_ip])                              .ljust( column_widths[:dns]     ).blue.bold
+      status_output << instance.contact_point(use_private_ip)              .ljust( column_widths[:dns]     ).blue.bold
       status_output << instance.availability_zone                          .ljust( 10                      ).magenta
       status_output << (instance.tags[@ec2_config[:aws_stages_tag]]  || '').ljust( column_widths[:stages]  ).yellow if stages_present
       status_output << (instance.tags[@ec2_config[:aws_roles_tag]]   || '').ljust( column_widths[:roles]   ).yellow if roles_present
