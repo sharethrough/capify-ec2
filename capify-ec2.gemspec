@@ -13,13 +13,11 @@ Gem::Specification.new do |s|
   s.description = %q{Capify-EC2 is used to generate Capistrano namespaces and tasks from Amazon EC2 instance tags, dynamically building the list of servers to be deployed to.}
   s.license     = 'MIT'
 
-  s.rubyforge_project = "capify-ec2"
-
   s.files         = `git ls-files`.split("\n")
   s.test_files    = `git ls-files -- {test,spec,features}/*`.split("\n")
   s.executables   = `git ls-files -- bin/*`.split("\n").map{ |f| File.basename(f) }
   s.require_paths = ["lib"]
-  s.add_dependency('fog', '>= 1.23.0')
+  s.add_dependency('fog-aws', '~> 3.6')
   s.add_dependency('colored', '=1.2')
   s.add_dependency('capistrano', '~> 2.14')
   s.add_dependency("rest-client", '~> 2.0')

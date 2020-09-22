@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 require 'rubygems'
-require 'fog'
+require 'fog/aws'
 require 'colored'
 require 'net/http'
 require 'net/https'

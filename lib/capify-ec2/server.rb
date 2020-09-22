@@ -12,7 +12,7 @@ module Fog
             dns_name || public_ip_address || private_ip_address
           end
         end
-        
+
         def name
           tags["Name"] || id
         end
